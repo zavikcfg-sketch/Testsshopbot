@@ -49,28 +49,46 @@ from aiogram.types import (
 # НАСТРОЙКИ
 # ============================================================
 
-BOT_TOKEN = "8777780924:AAFQg_KopPFIls-FZ-2pQN-Iq38IKL31rks"
+# ============================================================
+# НАСТРОЙКИ
+# ============================================================
 
-# Номер кошелька ЮMoney
-YOOMONEY_WALLET = "41001XXXXXXXXXXXX"
+BOT_TOKEN = os.getenv("8777780924:AAFQg_KopPFIls-FZ-2pQN-Iq38IKL31rks")
 
-# Секрет из:
-# ЮMoney -> Настройки -> HTTP-уведомления -> Показать секрет
-YOOMONEY_SECRET = "PASTE_YOOMONEY_SECRET_HERE"
+YOOMONEY_WALLET = os.getenv("YOOMONEY_WALLET")
 
-# Публичный HTTPS адрес сервера.
-# Пример:
-# https://example.com/yoomoney
-YOOMONEY_WEBHOOK_URL = "https://YOUR_DOMAIN/yoomoney"
+YOOMONEY_SECRET = os.getenv("YOOMONEY_SECRET")
 
-# Порт локального веб-сервера
-WEB_PORT = 8080
+YOOMONEY_WEBHOOK_URL = os.getenv(
+    "YOOMONEY_WEBHOOK_URL",
+    ""
+)
 
-# ID администраторов Telegram.
-# Узнать свой ID можно через @userinfobot.
+# Render сам передаёт PORT.
+WEB_PORT = int(
+    os.getenv("PORT", "10000")
+)
+
 ADMIN_IDS = {
-    8346538289,
+    int(x.strip())
+    for x in os.getenv(
+        "8346538289",
+        ""
+    ).split(",")
+    if x.strip()
 }
+
+FILES_DIR = Path("files")
+FILES_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+DB_FILE = "store.db"
+
+SHOP_NAME = "Digital Market"
+
+CURRENCY = "₽"
 
 # Папка с файлами
 FILES_DIR = Path("files")
