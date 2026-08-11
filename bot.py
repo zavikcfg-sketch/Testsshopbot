@@ -596,14 +596,10 @@ def button(
     url: str | None = None,
     style: str | None = None,
 ):
-    # --------------------------------------------------------
-    # Совместимость с текущими вызовами:
-    #
-    # button("Каталог", "catalog", "primary")
-    #
-    # Здесь "primary" раньше попадал в url.
-    # Теперь автоматически определяем его как style.
-    # --------------------------------------------------------
+    # Поддержка текущего формата:
+    # button("Текст", "callback", "primary")
+    # button("Текст", "callback", "success")
+    # button("Текст", "callback", "danger")
 
     if (
         url in {
@@ -626,7 +622,11 @@ def button(
     if url is not None:
         kwargs["url"] = url
 
-    if style is not None:
+    if style in {
+        "primary",
+        "success",
+        "danger",
+    }:
         kwargs["style"] = style
 
     return InlineKeyboardButton(
