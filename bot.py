@@ -1,27 +1,33 @@
 # ============================================================
-# DIGITAL MARKET — Telegram Digital Store
+# DIGITAL MARKET — TELEGRAM DIGITAL STORE
 # Python 3.12+
+# aiogram 3.x + aiohttp + SQLite
+# Render Webhook
+# ЮMoney
+# ============================================================
 #
-# Telegram Bot API 10.x
-# aiogram 3.x
-# aiohttp
+# requirements.txt:
 #
-# Возможности:
-#   🛍 Красивый каталог
-#   💳 ЮMoney
-#   📁 Автоматическая выдача файлов
-#   📦 История покупок
-#   👤 Пользовательская статистика
-#   ⚙️ Админ-панель
-#   ➕ Добавление товаров
-#   🗑 Удаление товаров
-#   📊 Статистика
-#   🔔 Уведомления админу
-#   🎨 Цветные кнопки Telegram API:
-#      primary = синяя
-#      success = зелёная
-#      danger  = красная
-#   🌐 Render webhook
+# aiogram>=3.22,<4
+# aiohttp>=3.12,<4
+#
+# Render:
+#
+# Build Command:
+# pip install -r requirements.txt
+#
+# Start Command:
+# python bot.py
+#
+# ОБЯЗАТЕЛЬНЫЕ ENV VARIABLES:
+#
+# BOT_TOKEN
+# YOOMONEY_WALLET
+# YOOMONEY_SECRET
+# WEBHOOK_BASE_URL
+# TELEGRAM_WEBHOOK_SECRET
+#
+# НЕ ХРАНИ ТОКЕНЫ В КОДЕ.
 #
 # ============================================================
 
@@ -33,6 +39,7 @@ import os
 import secrets
 import sqlite3
 import urllib.parse
+
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,42 +57,32 @@ from aiogram.types import (
     Message,
 )
 
+
 # ============================================================
 # CONFIG
 # ============================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 YOOMONEY_WALLET = os.getenv(
     "YOOMONEY_WALLET",
     "",
-)
+).strip()
 
 YOOMONEY_SECRET = os.getenv(
     "YOOMONEY_SECRET",
     "",
-)
+).strip()
 
 WEBHOOK_BASE_URL = os.getenv(
     "WEBHOOK_BASE_URL",
     "",
-).rstrip("/")
+).strip().rstrip("/")
 
-ADMIN_IDS = {
-    int(x.strip())
-    for x in os.getenv(
-        "ADMIN_IDS",
-        "8346538289",
-    ).split(",")
-    if x.strip().isdigit()
-}
-
-SHOP_NAME = os.getenv(
-    "SHOP_NAME",
-    "Digital Market",
-)
-
-CURRENCY = "₽"
+TELEGRAM_WEBHOOK_SECRET = os.getenv(
+    "TELEGRAM_WEBHOOK_SECRET",
+    "",
+).strip()
 
 PORT = int(
     os.getenv(
@@ -94,7 +91,16 @@ PORT = int(
     )
 )
 
-DB_FILE = "store.db"
+SHOP_NAME = os.getenv(
+    "SHOP_NAME",
+    "Digital Market",
+).strip()
+
+CURRENCY = "₽"
+
+ADMIN_IDS = {
+    8346538289,
+}
 
 FILES_DIR = Path("files")
 FILES_DIR.mkdir(
@@ -102,18 +108,8 @@ FILES_DIR.mkdir(
     exist_ok=True,
 )
 
-TELEGRAM_WEBHOOK_PATH = "/telegram/webhook"
-YOOMONEY_WEBHOOK_PATH = "/yoomoney"
+DB_FILE = "store.db"
 
-TELEGRAM_WEBHOOK_URL = (
-    f"{WEBHOOK_BASE_URL}"
-    f"{TELEGRAM_WEBHOOK_PATH}"
-)
-
-YOOMONEY_WEBHOOK_URL = (
-    f"{WEBHOOK_BASE_URL}"
-    f"{YOOMONEY_WEBHOOK_PATH}"
-)
 
 # ============================================================
 # LOGGING
@@ -128,25 +124,82 @@ logging.basicConfig(
     ),
 )
 
-logger = logging.getLogger(
-    "digital-market"
-)
+logger = logging.getLogger("digital-market")
+
 
 # ============================================================
-# TIME
+# HELPERS
 # ============================================================
 
-
-def utc_now():
+def utc_now() -> str:
+    """
+    Python 3.12+
+    Вместо deprecated datetime.utcnow()
+    """
     return datetime.now(
         timezone.utc
     ).isoformat()
 
 
+def money(value: float) -> str:
+    return f"{float(value):,.2f}".replace(
+        ",",
+        " ",
+    )
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+
+def env_ok(value: str) -> bool:
+    return bool(value)
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+def validate_config():
+    errors = []
+
+    if not BOT_TOKEN:
+        errors.append(
+            "BOT_TOKEN не задан."
+        )
+
+    if not YOOMONEY_WALLET:
+        errors.append(
+            "YOOMONEY_WALLET не задан."
+        )
+
+    if not YOOMONEY_SECRET:
+        errors.append(
+            "YOOMONEY_SECRET не задан."
+        )
+
+    if not WEBHOOK_BASE_URL:
+        errors.append(
+            "WEBHOOK_BASE_URL не задан."
+        )
+
+    if not TELEGRAM_WEBHOOK_SECRET:
+        errors.append(
+            "TELEGRAM_WEBHOOK_SECRET не задан."
+        )
+
+    if errors:
+        raise RuntimeError(
+            "\n".join(
+                f"• {error}"
+                for error in errors
+            )
+        )
+
+
 # ============================================================
 # DATABASE
 # ============================================================
-
 
 def db():
     connection = sqlite3.connect(
@@ -160,19 +213,7 @@ def db():
 
 
 def init_db():
-
     connection = db()
-
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
 
     connection.execute(
         """
@@ -199,40 +240,39 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'pending',
             operation_id TEXT,
             created_at TEXT NOT NULL,
-            paid_at TEXT,
-            delivery_sent INTEGER NOT NULL DEFAULT 0
+            paid_at TEXT
         )
         """
     )
 
-    # Для существующей базы добавляем delivery_sent,
-    # если база была создана старой версией.
-    try:
-        connection.execute(
-            """
-            ALTER TABLE orders
-            ADD COLUMN delivery_sent INTEGER
-            NOT NULL DEFAULT 0
-            """
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            created_at TEXT NOT NULL
         )
-    except sqlite3.OperationalError:
-        pass
+        """
+    )
 
     connection.commit()
     connection.close()
+
+    logger.info(
+        "Database initialized"
+    )
 
 
 # ============================================================
 # USERS
 # ============================================================
 
-
 def save_user(
     user_id: int,
     username: str | None,
     first_name: str | None,
 ):
-
     connection = db()
 
     connection.execute(
@@ -266,9 +306,7 @@ def save_user(
 # PRODUCTS
 # ============================================================
 
-
 def get_products():
-
     connection = db()
 
     rows = connection.execute(
@@ -284,10 +322,7 @@ def get_products():
     return rows
 
 
-def get_product(
-    product_id: int,
-):
-
+def get_product(product_id: int):
     connection = db()
 
     row = connection.execute(
@@ -310,7 +345,6 @@ def add_product(
     price: float,
     file_path: str,
 ):
-
     connection = db()
 
     cursor = connection.execute(
@@ -341,10 +375,7 @@ def add_product(
     return product_id
 
 
-def delete_product(
-    product_id: int,
-):
-
+def delete_product(product_id: int):
     connection = db()
 
     connection.execute(
@@ -363,14 +394,12 @@ def delete_product(
 # ORDERS
 # ============================================================
 
-
 def create_order(
     user_id: int,
     username: str | None,
     product_id: int,
     amount: float,
 ):
-
     label = (
         "TG-"
         + secrets.token_hex(10).upper()
@@ -387,10 +416,17 @@ def create_order(
             amount,
             label,
             status,
-            created_at,
-            delivery_sent
+            created_at
         )
-        VALUES (?, ?, ?, ?, ?, 'pending', ?, 0)
+        VALUES (
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            'pending',
+            ?
+        )
         """,
         (
             user_id,
@@ -410,10 +446,7 @@ def create_order(
     return order_id, label
 
 
-def get_order_by_label(
-    label: str,
-):
-
+def get_order_by_label(label: str):
     connection = db()
 
     row = connection.execute(
@@ -434,7 +467,6 @@ def mark_order_paid(
     label: str,
     operation_id: str,
 ):
-
     connection = db()
 
     row = connection.execute(
@@ -442,7 +474,7 @@ def mark_order_paid(
         SELECT *
         FROM orders
         WHERE label = ?
-        AND status = 'pending'
+          AND status = 'pending'
         """,
         (label,),
     ).fetchone()
@@ -459,7 +491,6 @@ def mark_order_paid(
             operation_id = ?,
             paid_at = ?
         WHERE label = ?
-        AND status = 'pending'
         """,
         (
             operation_id,
@@ -474,29 +505,7 @@ def mark_order_paid(
     return row
 
 
-def mark_delivery_sent(
-    label: str,
-):
-
-    connection = db()
-
-    connection.execute(
-        """
-        UPDATE orders
-        SET delivery_sent = 1
-        WHERE label = ?
-        """,
-        (label,),
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def get_user_orders(
-    user_id: int,
-):
-
+def get_user_orders(user_id: int):
     connection = db()
 
     rows = connection.execute(
@@ -505,12 +514,9 @@ def get_user_orders(
             orders.*,
             products.name AS product_name
         FROM orders
-
         LEFT JOIN products
             ON products.id = orders.product_id
-
         WHERE orders.user_id = ?
-
         ORDER BY orders.id DESC
         """,
         (user_id,),
@@ -525,21 +531,28 @@ def get_user_orders(
 # STATISTICS
 # ============================================================
 
-
 def statistics():
-
     connection = db()
 
     users = connection.execute(
-        "SELECT COUNT(*) FROM users"
+        """
+        SELECT COUNT(*)
+        FROM users
+        """
     ).fetchone()[0]
 
     products = connection.execute(
-        "SELECT COUNT(*) FROM products"
+        """
+        SELECT COUNT(*)
+        FROM products
+        """
     ).fetchone()[0]
 
     orders = connection.execute(
-        "SELECT COUNT(*) FROM orders"
+        """
+        SELECT COUNT(*)
+        FROM orders
+        """
     ).fetchone()[0]
 
     paid_orders = connection.execute(
@@ -573,9 +586,8 @@ def statistics():
 
 
 # ============================================================
-# TELEGRAM BOT
+# BOT
 # ============================================================
-
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -588,117 +600,64 @@ dp = Dispatcher()
 
 
 # ============================================================
-# BUTTON HELPERS
-#
-# Telegram Bot API:
-#
-# primary = blue
-# success = green
-# danger  = red
-#
-# ============================================================
-
-
-def button(
-    text: str,
-    callback_data: str | None = None,
-    url: str | None = None,
-    style: str | None = None,
-):
-
-    kwargs = {
-        "text": text,
-    }
-
-    if callback_data is not None:
-        kwargs["callback_data"] = (
-            callback_data
-        )
-
-    if url is not None:
-        kwargs["url"] = url
-
-    if style is not None:
-        kwargs["style"] = style
-
-    return InlineKeyboardButton(
-        **kwargs
-    )
-
-
-# ============================================================
 # MAIN MENU
 # ============================================================
 
-
 def main_menu():
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                button(
-                    "🛍 Каталог",
-                    "catalog",
-                    "primary",
+                InlineKeyboardButton(
+                    text="🛍  Каталог",
+                    callback_data="catalog",
                 ),
             ],
             [
-                button(
-                    "📦 Мои покупки",
-                    "purchases",
-                    "success",
-                ),
-                button(
-                    "💎 Как это работает",
-                    "how",
+                InlineKeyboardButton(
+                    text="📦  Мои покупки",
+                    callback_data="purchases",
                 ),
             ],
             [
-                button(
-                    "💬 Поддержка",
-                    "support",
+                InlineKeyboardButton(
+                    text="💎  Как это работает",
+                    callback_data="how",
+                ),
+                InlineKeyboardButton(
+                    text="💬  Поддержка",
+                    callback_data="support",
                 ),
             ],
         ]
     )
 
 
-# ============================================================
-# CATALOG KEYBOARD
-# ============================================================
-
-
-def catalog_keyboard():
-
-    rows = []
-
-    for product in get_products():
-
-        rows.append(
-            [
-                button(
-                    (
-                        f"📄 {product['name']} "
-                        f"• "
-                        f"{product['price']:.2f} ₽"
-                    ),
-                    f"product:{product['id']}",
-                    "primary",
-                )
-            ]
-        )
-
-    rows.append(
-        [
-            button(
-                "🏠 Главное меню",
-                "home",
-            )
-        ]
-    )
-
+def home_keyboard():
     return InlineKeyboardMarkup(
-        inline_keyboard=rows
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍  Открыть каталог",
+                    callback_data="catalog",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📦  Мои покупки",
+                    callback_data="purchases",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💎  Как это работает",
+                    callback_data="how",
+                ),
+                InlineKeyboardButton(
+                    text="💬  Поддержка",
+                    callback_data="support",
+                ),
+            ],
+        ]
     )
 
 
@@ -706,133 +665,139 @@ def catalog_keyboard():
 # PRODUCT KEYBOARD
 # ============================================================
 
-
 def product_keyboard(
     product_id: int,
 ):
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                button(
-                    "💳 Купить сейчас",
-                    f"buy:{product_id}",
-                    "success",
-                )
+                InlineKeyboardButton(
+                    text="💳  Купить сейчас",
+                    callback_data=(
+                        f"buy:{product_id}"
+                    ),
+                ),
             ],
             [
-                button(
-                    "◀️ Назад к каталогу",
-                    "catalog",
-                )
+                InlineKeyboardButton(
+                    text="◀️  Назад к каталогу",
+                    callback_data="catalog",
+                ),
             ],
         ]
     )
 
 
 # ============================================================
-# PAYMENT KEYBOARD
+# PAYMENT URL
 # ============================================================
+
+def create_payment_url(
+    wallet: str,
+    amount: float,
+    label: str,
+):
+    params = {
+        "receiver": wallet,
+        "quickpay-form": "button",
+        "sum": f"{amount:.2f}",
+        "paymentType": "AC",
+        "label": label,
+    }
+
+    encoded = urllib.parse.urlencode(
+        params
+    )
+
+    return (
+        "https://yoomoney.ru/quickpay/confirm?"
+        + encoded
+    )
 
 
 def payment_keyboard(
     payment_url: str,
     label: str,
 ):
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                button(
-                    "💳 ОПЛАТИТЬ ЮMONEY",
+                InlineKeyboardButton(
+                    text="💳  ОПЛАТИТЬ ЮMONEY",
                     url=payment_url,
-                    style="success",
-                )
+                ),
             ],
             [
-                button(
-                    "🔄 Я оплатил — проверить",
-                    f"check:{label}",
-                    "primary",
-                )
+                InlineKeyboardButton(
+                    text="🔄  Проверить оплату",
+                    callback_data=(
+                        f"check:{label}"
+                    ),
+                ),
             ],
             [
-                button(
-                    "❌ Отменить заказ",
-                    "catalog",
-                    "danger",
-                )
+                InlineKeyboardButton(
+                    text="◀️  Вернуться в каталог",
+                    callback_data="catalog",
+                ),
             ],
         ]
     )
 
 
 # ============================================================
-# ADMIN MENU
+# ADMIN KEYBOARD
 # ============================================================
-
 
 def admin_menu():
-
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                button(
-                    "➕ Добавить товар",
-                    "admin_add",
-                    "success",
-                )
-            ],
-            [
-                button(
-                    "📦 Товары",
-                    "admin_products",
-                    "primary",
-                ),
-                button(
-                    "📊 Статистика",
-                    "admin_stats",
+                InlineKeyboardButton(
+                    text="➕  Добавить товар",
+                    callback_data="admin_add",
                 ),
             ],
             [
-                button(
-                    "🏠 Магазин",
-                    "home",
-                )
+                InlineKeyboardButton(
+                    text="📦  Управление товарами",
+                    callback_data="admin_products",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📊  Статистика",
+                    callback_data="admin_stats",
+                ),
             ],
         ]
     )
-
-
-# ============================================================
-# ADMIN PRODUCTS
-# ============================================================
 
 
 def admin_products_keyboard():
-
     rows = []
 
-    for product in get_products():
+    products = get_products()
 
+    for product in products:
         rows.append(
             [
-                button(
-                    (
-                        f"🗑 "
-                        f"{product['name']}"
+                InlineKeyboardButton(
+                    text=(
+                        f"🗑  {product['name']}"
                     ),
-                    f"delete:{product['id']}",
-                    "danger",
+                    callback_data=(
+                        f"delete:{product['id']}"
+                    ),
                 )
             ]
         )
 
     rows.append(
         [
-            button(
-                "◀️ Назад",
-                "admin",
+            InlineKeyboardButton(
+                text="◀️  Панель администратора",
+                callback_data="admin",
             )
         ]
     )
@@ -843,89 +808,50 @@ def admin_products_keyboard():
 
 
 # ============================================================
-# TEXTS
+# /START
 # ============================================================
-
-
-def home_text():
-
-    return (
-        f"✨ <b>{SHOP_NAME}</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "Добро пожаловать в магазин "
-        "цифровых товаров.\n\n"
-        "📁 <b>Файлы</b> — получаете прямо "
-        "в Telegram\n"
-        "⚡ <b>Моментальная выдача</b> — "
-        "без ожидания\n"
-        "💳 <b>ЮMoney</b> — удобная оплата\n"
-        "🔐 <b>Безопасные заказы</b> — "
-        "уникальная метка каждого платежа\n\n"
-        "👇 <b>Выберите нужный раздел:</b>"
-    )
-
-
-def catalog_text():
-
-    return (
-        "🛍 <b>КАТАЛОГ</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "Выберите цифровой товар "
-        "из списка ниже.\n\n"
-        "⚡ После оплаты файл будет "
-        "отправлен автоматически."
-    )
-
-
-# ============================================================
-# START
-# ============================================================
-
 
 @dp.message(CommandStart())
 async def start(
     message: Message,
 ):
-
     if not message.from_user:
         return
 
     save_user(
-        message.from_user.id,
-        message.from_user.username,
-        message.from_user.first_name,
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name,
+    )
+
+    first_name = (
+        message.from_user.first_name
+        or "друг"
+    )
+
+    text = (
+        f"✨ <b>{SHOP_NAME}</b>\n\n"
+        f"Привет, <b>{first_name}</b>! 👋\n\n"
+        "Добро пожаловать в магазин "
+        "цифровых товаров.\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "📁 <b>Цифровые товары</b>\n"
+        "⚡ <b>Мгновенная выдача</b>\n"
+        "💳 <b>Оплата через ЮMoney</b>\n"
+        "🔐 <b>Безопасное оформление</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Выберите нужный раздел ниже:</i>"
     )
 
     await message.answer(
-        home_text(),
-        reply_markup=main_menu(),
+        text,
+        reply_markup=home_keyboard(),
     )
-
-
-# ============================================================
-# HOME
-# ============================================================
-
-
-@dp.callback_query(
-    F.data == "home"
-)
-async def home(
-    callback: CallbackQuery,
-):
-
-    await callback.message.edit_text(
-        home_text(),
-        reply_markup=main_menu(),
-    )
-
-    await callback.answer()
 
 
 # ============================================================
 # CATALOG
 # ============================================================
-
 
 @dp.callback_query(
     F.data == "catalog"
@@ -933,35 +859,72 @@ async def home(
 async def catalog(
     callback: CallbackQuery,
 ):
-
     products = get_products()
 
     if not products:
+        text = (
+            "🛍 <b>КАТАЛОГ</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "📦 Сейчас товаров нет.\n\n"
+            "Загляните позже."
+        )
 
         await callback.message.edit_text(
-            "🛍 <b>КАТАЛОГ</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "😔 Сейчас товаров нет.\n\n"
-            "Загляните позже.",
+            text,
             reply_markup=main_menu(),
         )
 
         await callback.answer()
-
         return
 
+    buttons = []
+
+    for product in products:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=(
+                        f"📄 {product['name']} "
+                        f"• {money(product['price'])} ₽"
+                    ),
+                    callback_data=(
+                        f"product:{product['id']}"
+                    ),
+                )
+            ]
+        )
+
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="🏠  Главное меню",
+                callback_data="home",
+            )
+        ]
+    )
+
+    text = (
+        "🛍 <b>КАТАЛОГ ТОВАРОВ</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Выберите товар, чтобы посмотреть "
+        "подробную информацию.\n\n"
+        "⚡ После оплаты файл будет отправлен "
+        "автоматически."
+    )
+
     await callback.message.edit_text(
-        catalog_text(),
-        reply_markup=catalog_keyboard(),
+        text,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=buttons
+        ),
     )
 
     await callback.answer()
 
 
 # ============================================================
-# PRODUCT
+# PRODUCT VIEW
 # ============================================================
-
 
 @dp.callback_query(
     F.data.startswith("product:")
@@ -969,12 +932,17 @@ async def catalog(
 async def product_view(
     callback: CallbackQuery,
 ):
-
     try:
         product_id = int(
-            callback.data.split(":")[1]
+            callback.data.split(
+                ":",
+                1,
+            )[1]
         )
-    except Exception:
+    except (
+        ValueError,
+        IndexError,
+    ):
         await callback.answer(
             "Ошибка товара.",
             show_alert=True,
@@ -986,26 +954,24 @@ async def product_view(
     )
 
     if not product:
-
         await callback.answer(
             "Товар не найден.",
             show_alert=True,
         )
-
         return
 
     text = (
-        "📦 <b>ТОВАР</b>\n"
+        "📄 <b>ТОВАР</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"📄 <b>{product['name']}</b>\n\n"
+        f"✨ <b>{product['name']}</b>\n\n"
         f"{product['description']}\n\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
         f"💰 Цена: "
-        f"<b>{product['price']:.2f} ₽</b>\n"
-        "⚡ Выдача: <b>мгновенно</b>\n"
+        f"<b>{money(product['price'])} ₽</b>\n"
+        "⚡ Получение: <b>мгновенно</b>\n"
         "📁 Формат: <b>цифровой файл</b>\n\n"
-        "Нажмите кнопку ниже, чтобы "
-        "оформить покупку."
+        "<i>После успешной оплаты бот "
+        "автоматически отправит файл.</i>"
     )
 
     await callback.message.edit_text(
@@ -1022,22 +988,26 @@ async def product_view(
 # BUY
 # ============================================================
 
-
 @dp.callback_query(
     F.data.startswith("buy:")
 )
 async def buy(
     callback: CallbackQuery,
 ):
-
     if not callback.from_user:
         return
 
     try:
         product_id = int(
-            callback.data.split(":")[1]
+            callback.data.split(
+                ":",
+                1,
+            )[1]
         )
-    except Exception:
+    except (
+        ValueError,
+        IndexError,
+    ):
         await callback.answer(
             "Ошибка товара.",
             show_alert=True,
@@ -1049,73 +1019,64 @@ async def buy(
     )
 
     if not product:
-
         await callback.answer(
             "Товар не найден.",
             show_alert=True,
         )
-
         return
 
     order_id, label = create_order(
         user_id=callback.from_user.id,
         username=callback.from_user.username,
         product_id=product_id,
-        amount=float(product["price"]),
+        amount=float(
+            product["price"]
+        ),
     )
 
-    payment_url = (
-        "https://yoomoney.ru/quickpay/confirm?"
-        + urllib.parse.urlencode(
-            {
-                "receiver":
-                    YOOMONEY_WALLET,
-                "quickpay-form":
-                    "button",
-                "sum":
-                    f"{product['price']:.2f}",
-                "paymentType":
-                    "AC",
-                "label":
-                    label,
-            }
-        )
+    payment_url = create_payment_url(
+        wallet=YOOMONEY_WALLET,
+        amount=float(
+            product["price"]
+        ),
+        label=label,
+    )
+
+    keyboard = payment_keyboard(
+        payment_url=payment_url,
+        label=label,
     )
 
     text = (
-        "🧾 <b>ОФОРМЛЕНИЕ ЗАКАЗА</b>\n"
+        "💳 <b>ОФОРМЛЕНИЕ ЗАКАЗА</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"📦 Товар:\n"
         f"<b>{product['name']}</b>\n\n"
         f"💰 К оплате:\n"
-        f"<b>{product['price']:.2f} ₽</b>\n\n"
-        f"🧾 Номер заказа:\n"
+        f"<b>{money(product['price'])} ₽</b>\n\n"
+        f"🧾 Заказ: "
         f"<code>#{order_id}</code>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "1️⃣ Нажмите "
-        "«ОПЛАТИТЬ ЮMONEY».\n"
+        "<b>Как оплатить:</b>\n\n"
+        "1️⃣ Нажмите «ОПЛАТИТЬ ЮMONEY».\n"
         "2️⃣ Завершите оплату.\n"
-        "3️⃣ Вернитесь сюда и нажмите "
-        "«Я оплатил — проверить».\n\n"
+        "3️⃣ Вернитесь в бот.\n"
+        "4️⃣ Нажмите «Проверить оплату».\n\n"
         "⚡ После подтверждения платежа "
         "файл будет отправлен автоматически."
     )
 
     await callback.message.edit_text(
         text,
-        reply_markup=payment_keyboard(
-            payment_url,
-            label,
-        ),
+        reply_markup=keyboard,
     )
 
     await callback.answer()
 
 
 # ============================================================
-# MANUAL CHECK
+# CHECK PAYMENT
 # ============================================================
-
 
 @dp.callback_query(
     F.data.startswith("check:")
@@ -1123,7 +1084,6 @@ async def buy(
 async def check_payment(
     callback: CallbackQuery,
 ):
-
     label = callback.data.split(
         ":",
         1,
@@ -1134,39 +1094,31 @@ async def check_payment(
     )
 
     if not order:
-
         await callback.answer(
             "Заказ не найден.",
             show_alert=True,
         )
-
         return
 
-    if (
-        order["user_id"]
-        != callback.from_user.id
-    ):
-
+    if order["user_id"] != callback.from_user.id:
         await callback.answer(
-            "Это не ваш заказ.",
+            "Этот заказ вам не принадлежит.",
             show_alert=True,
         )
-
         return
 
     if order["status"] == "paid":
-
         await callback.answer(
-            "✅ Заказ уже оплачен.",
+            "✅ Оплата уже подтверждена.",
             show_alert=True,
         )
-
         return
 
     await callback.answer(
-        "⏳ Оплата ещё не подтверждена.\n"
+        "⏳ Платёж ещё не подтверждён.\n\n"
         "Если вы только что оплатили, "
-        "подождите несколько секунд.",
+        "подождите несколько секунд "
+        "и попробуйте снова.",
         show_alert=True,
     )
 
@@ -1175,57 +1127,51 @@ async def check_payment(
 # PURCHASES
 # ============================================================
 
-
 @dp.callback_query(
     F.data == "purchases"
 )
 async def purchases(
     callback: CallbackQuery,
 ):
-
     rows = get_user_orders(
         callback.from_user.id
     )
 
     if not rows:
-
-        await callback.message.edit_text(
-            "📦 <b>МОИ ПОКУПКИ</b>\n"
+        text = (
+            "📦 <b>МОИ ПОКУПКИ</b>\n\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             "У вас пока нет заказов.\n\n"
-            "🛍 Загляните в каталог "
-            "и выберите товар.",
+            "🛍 Перейдите в каталог "
+            "и выберите товар."
+        )
+
+        await callback.message.edit_text(
+            text,
             reply_markup=main_menu(),
         )
 
         await callback.answer()
-
         return
 
     text = (
-        "📦 <b>МОИ ПОКУПКИ</b>\n"
+        "📦 <b>МОИ ПОКУПКИ</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
     )
 
     for row in rows[:15]:
-
         if row["status"] == "paid":
-
-            status = "🟢 Оплачен"
-
+            status = "✅ Оплачен"
         else:
-
-            status = "🟡 Ожидает оплаты"
+            status = "⏳ Ожидает оплаты"
 
         text += (
             f"📄 <b>"
             f"{row['product_name'] or 'Товар'}"
             f"</b>\n"
-            f"💰 "
-            f"{row['amount']:.2f} ₽\n"
+            f"💰 {money(row['amount'])} ₽\n"
             f"{status}\n"
-            f"🧾 "
-            f"<code>{row['label']}</code>\n\n"
+            f"🧾 <code>{row['label']}</code>\n\n"
         )
 
     await callback.message.edit_text(
@@ -1240,48 +1186,46 @@ async def purchases(
 # HOW
 # ============================================================
 
-
 @dp.callback_query(
     F.data == "how"
 )
 async def how(
     callback: CallbackQuery,
 ):
-
     text = (
-        "💎 <b>КАК ЭТО РАБОТАЕТ</b>\n"
+        "💎 <b>КАК ЭТО РАБОТАЕТ</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "🛍 <b>1. Выбираете товар</b>\n"
-        "Открываете каталог и выбираете "
-        "нужный файл.\n\n"
-        "💳 <b>2. Оплачиваете</b>\n"
-        "Бот создаёт уникальный заказ "
-        "и отправляет вас на страницу "
-        "оплаты ЮMoney.\n\n"
-        "🔐 <b>3. ЮMoney подтверждает платёж</b>\n"
-        "Бот получает HTTP-уведомление "
-        "и проверяет его подпись.\n\n"
-        "📁 <b>4. Получаете файл</b>\n"
-        "После успешного подтверждения "
-        "файл автоматически отправляется "
-        "в этот чат.\n\n"
-        "⚡ Всё максимально быстро."
+        "🛍 <b>1. Выберите товар</b>\n"
+        "Откройте каталог и выберите "
+        "нужный цифровой товар.\n\n"
+        "💳 <b>2. Оплатите</b>\n"
+        "Бот создаст уникальный заказ "
+        "и отправит вас на страницу ЮMoney.\n\n"
+        "🔐 <b>3. Подтверждение</b>\n"
+        "После поступления платежа "
+        "бот проверит заказ.\n\n"
+        "📁 <b>4. Получите файл</b>\n"
+        "Файл будет автоматически "
+        "отправлен в этот чат.\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "⚡ Быстро\n"
+        "🔐 Безопасно\n"
+        "📁 Автоматически"
     )
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                button(
-                    "🛍 Открыть каталог",
-                    "catalog",
-                    "primary",
-                )
+                InlineKeyboardButton(
+                    text="🛍  Каталог",
+                    callback_data="catalog",
+                ),
             ],
             [
-                button(
-                    "🏠 Главное меню",
-                    "home",
-                )
+                InlineKeyboardButton(
+                    text="🏠  Главное меню",
+                    callback_data="home",
+                ),
             ],
         ]
     )
@@ -1298,23 +1242,21 @@ async def how(
 # SUPPORT
 # ============================================================
 
-
 @dp.callback_query(
     F.data == "support"
 )
 async def support(
     callback: CallbackQuery,
 ):
-
     text = (
-        "💬 <b>ПОДДЕРЖКА</b>\n"
+        "💬 <b>ПОДДЕРЖКА</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "Если у вас возникла проблема "
-        "с оплатой или получением товара, "
-        "обратитесь к администратору.\n\n"
-        "🧾 Подготовьте номер заказа — "
-        "так мы быстрее найдём ваш платёж.\n\n"
-        "Спасибо за покупку ❤️"
+        "Возникла проблема с заказом, "
+        "оплатой или получением файла?\n\n"
+        "Напишите администратору "
+        "магазина.\n\n"
+        "🕐 Мы постараемся помочь "
+        "как можно быстрее."
     )
 
     await callback.message.edit_text(
@@ -1326,16 +1268,39 @@ async def support(
 
 
 # ============================================================
-# ADMIN
+# HOME
 # ============================================================
 
-
-def is_admin(
-    user_id: int,
+@dp.callback_query(
+    F.data == "home"
+)
+async def home(
+    callback: CallbackQuery,
 ):
+    text = (
+        f"✨ <b>{SHOP_NAME}</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Цифровые товары "
+        "с мгновенной выдачей.\n\n"
+        "📁 <b>Файлы</b>\n"
+        "💳 <b>ЮMoney</b>\n"
+        "⚡ <b>Автоматическая доставка</b>\n"
+        "🔐 <b>Уникальные заказы</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "<i>Выберите раздел:</i>"
+    )
 
-    return user_id in ADMIN_IDS
+    await callback.message.edit_text(
+        text,
+        reply_markup=home_keyboard(),
+    )
 
+    await callback.answer()
+
+
+# ============================================================
+# ADMIN
+# ============================================================
 
 @dp.message(
     Command("admin")
@@ -1343,31 +1308,23 @@ def is_admin(
 async def admin(
     message: Message,
 ):
-
     if not message.from_user:
         return
 
     if not is_admin(
         message.from_user.id
     ):
-
         await message.answer(
             "⛔ <b>Доступ запрещён.</b>"
         )
-
         return
 
     await message.answer(
-        "⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА</b>\n"
+        "⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Управление магазином:",
         reply_markup=admin_menu(),
     )
-
-
-# ============================================================
-# ADMIN CALLBACK
-# ============================================================
 
 
 @dp.callback_query(
@@ -1376,22 +1333,19 @@ async def admin(
 async def admin_callback(
     callback: CallbackQuery,
 ):
-
     if not is_admin(
         callback.from_user.id
     ):
-
         await callback.answer(
             "Доступ запрещён.",
             show_alert=True,
         )
-
         return
 
     await callback.message.edit_text(
-        "⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА</b>\n"
+        "⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "Управление магазином:",
+        "Выберите действие:",
         reply_markup=admin_menu(),
     )
 
@@ -1399,9 +1353,8 @@ async def admin_callback(
 
 
 # ============================================================
-# ADMIN STATS
+# ADMIN STATISTICS
 # ============================================================
-
 
 @dp.callback_query(
     F.data == "admin_stats"
@@ -1409,16 +1362,13 @@ async def admin_callback(
 async def admin_stats(
     callback: CallbackQuery,
 ):
-
     if not is_admin(
         callback.from_user.id
     ):
-
         await callback.answer(
             "Доступ запрещён.",
             show_alert=True,
         )
-
         return
 
     (
@@ -1430,18 +1380,19 @@ async def admin_stats(
     ) = statistics()
 
     text = (
-        "📊 <b>СТАТИСТИКА</b>\n"
+        "📊 <b>СТАТИСТИКА</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"👥 Пользователей: "
-        f"<b>{users}</b>\n"
+        f"<b>{users}</b>\n\n"
         f"📦 Товаров: "
-        f"<b>{products}</b>\n"
+        f"<b>{products}</b>\n\n"
         f"🧾 Заказов: "
-        f"<b>{orders}</b>\n"
+        f"<b>{orders}</b>\n\n"
         f"✅ Оплачено: "
-        f"<b>{paid_orders}</b>\n"
+        f"<b>{paid_orders}</b>\n\n"
         f"💰 Выручка: "
-        f"<b>{revenue:.2f} ₽</b>"
+        f"<b>{money(revenue)} ₽</b>\n\n"
+        "━━━━━━━━━━━━━━━━━━"
     )
 
     await callback.message.edit_text(
@@ -1456,49 +1407,39 @@ async def admin_stats(
 # ADMIN PRODUCTS
 # ============================================================
 
-
 @dp.callback_query(
     F.data == "admin_products"
 )
 async def admin_products(
     callback: CallbackQuery,
 ):
-
     if not is_admin(
         callback.from_user.id
     ):
-
         await callback.answer(
             "Доступ запрещён.",
             show_alert=True,
         )
-
         return
 
     products = get_products()
 
     if not products:
-
         text = (
-            "📦 <b>ТОВАРЫ</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
+            "📦 <b>ТОВАРЫ</b>\n\n"
             "Товаров пока нет."
         )
-
     else:
-
         text = (
-            "📦 <b>ТОВАРЫ</b>\n"
+            "📦 <b>ТОВАРЫ</b>\n\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
         )
 
         for product in products:
-
             text += (
                 f"#{product['id']} "
-                f"• <b>{product['name']}</b>\n"
-                f"💰 "
-                f"{product['price']:.2f} ₽\n\n"
+                f"<b>{product['name']}</b>\n"
+                f"💰 {money(product['price'])} ₽\n\n"
             )
 
     await callback.message.edit_text(
@@ -1510,9 +1451,8 @@ async def admin_products(
 
 
 # ============================================================
-# ADMIN ADD PRODUCT
+# ADMIN ADD PRODUCT STATE
 # ============================================================
-
 
 admin_states = {}
 
@@ -1523,16 +1463,13 @@ admin_states = {}
 async def admin_add(
     callback: CallbackQuery,
 ):
-
     if not is_admin(
         callback.from_user.id
     ):
-
         await callback.answer(
             "Доступ запрещён.",
             show_alert=True,
         )
-
         return
 
     admin_states[
@@ -1542,9 +1479,10 @@ async def admin_add(
     }
 
     await callback.message.edit_text(
-        "➕ <b>ДОБАВЛЕНИЕ ТОВАРА</b>\n"
+        "➕ <b>ДОБАВЛЕНИЕ ТОВАРА</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "Введите название товара:"
+        "Шаг 1 из 4\n\n"
+        "📄 Введите название товара:"
     )
 
     await callback.answer()
@@ -1554,18 +1492,14 @@ async def admin_add(
 # ADMIN INPUT
 # ============================================================
 
-
 @dp.message()
 async def admin_input(
     message: Message,
 ):
-
     if not message.from_user:
         return
 
-    user_id = (
-        message.from_user.id
-    )
+    user_id = message.from_user.id
 
     if not is_admin(user_id):
         return
@@ -1584,26 +1518,26 @@ async def admin_input(
     # --------------------------------------------------------
 
     if step == "name":
-
         if not message.text:
-
             await message.answer(
-                "❌ Введите название текстом."
+                "❌ Отправьте название текстом."
             )
-
             return
 
-        state["name"] = (
-            message.text.strip()
-        )
+        name = message.text.strip()
 
-        state["step"] = (
-            "description"
-        )
+        if not name:
+            await message.answer(
+                "❌ Название не может быть пустым."
+            )
+            return
+
+        state["name"] = name
+        state["step"] = "description"
 
         await message.answer(
-            "📝 <b>Описание товара</b>\n\n"
-            "Отправьте описание:"
+            "📝 <b>Шаг 2 из 4</b>\n\n"
+            "Введите описание товара:"
         )
 
         return
@@ -1613,23 +1547,25 @@ async def admin_input(
     # --------------------------------------------------------
 
     if step == "description":
-
         if not message.text:
-
             await message.answer(
                 "❌ Отправьте описание текстом."
             )
-
             return
 
-        state["description"] = (
-            message.text.strip()
-        )
+        description = message.text.strip()
 
+        if not description:
+            await message.answer(
+                "❌ Описание не может быть пустым."
+            )
+            return
+
+        state["description"] = description
         state["step"] = "price"
 
         await message.answer(
-            "💰 <b>Цена</b>\n\n"
+            "💰 <b>Шаг 3 из 4</b>\n\n"
             "Введите цену в рублях.\n\n"
             "Например:\n"
             "<code>499</code>"
@@ -1642,44 +1578,39 @@ async def admin_input(
     # --------------------------------------------------------
 
     if step == "price":
-
         if not message.text:
-
             await message.answer(
                 "❌ Введите цену."
             )
-
             return
 
         try:
-
             price = float(
-                message.text
-                .replace(",", ".")
-                .strip()
+                message.text.replace(
+                    ",",
+                    ".",
+                ).strip()
             )
-
-            if price <= 0:
-                raise ValueError
-
         except ValueError:
-
             await message.answer(
                 "❌ Неверная цена.\n\n"
-                "Пример: "
-                "<code>499</code>"
+                "Пример: <code>499</code>"
             )
+            return
 
+        if price <= 0:
+            await message.answer(
+                "❌ Цена должна быть больше нуля."
+            )
             return
 
         state["price"] = price
-
         state["step"] = "file"
 
         await message.answer(
-            "📁 <b>Файл товара</b>\n\n"
-            "Теперь отправьте файл "
-            "как документ Telegram."
+            "📁 <b>Шаг 4 из 4</b>\n\n"
+            "Отправьте файл товара "
+            "<b>как документ</b> Telegram."
         )
 
         return
@@ -1689,41 +1620,36 @@ async def admin_input(
     # --------------------------------------------------------
 
     if step == "file":
-
         if not message.document:
-
             await message.answer(
-                "❌ Нужно отправить именно "
-                "файл как документ Telegram."
+                "❌ Нужно отправить файл "
+                "именно как документ."
             )
-
             return
 
-        document = (
-            message.document
+        document = message.document
+
+        original_name = (
+            document.file_name
+            or "file.bin"
+        )
+
+        safe_name = (
+            secrets.token_hex(8)
+            + "_"
+            + Path(
+                original_name
+            ).name
+        )
+
+        destination = (
+            FILES_DIR
+            / safe_name
         )
 
         try:
-
-            tg_file = (
-                await bot.get_file(
-                    document.file_id
-                )
-            )
-
-            original_name = (
-                document.file_name
-                or "file.bin"
-            )
-
-            safe_name = (
-                f"{secrets.token_hex(8)}_"
-                f"{original_name}"
-            )
-
-            destination = (
-                FILES_DIR
-                / safe_name
+            tg_file = await bot.get_file(
+                document.file_id
             )
 
             await bot.download_file(
@@ -1732,7 +1658,6 @@ async def admin_input(
             )
 
         except Exception as error:
-
             logger.exception(
                 "File download error: %s",
                 error,
@@ -1746,35 +1671,26 @@ async def admin_input(
 
         product_id = add_product(
             name=state["name"],
-            description=state[
-                "description"
-            ],
+            description=state["description"],
             price=state["price"],
             file_path=str(
                 destination
             ),
         )
 
-        product_name = state[
-            "name"
-        ]
-
-        product_price = state[
-            "price"
-        ]
+        product_name = state["name"]
+        product_price = state["price"]
 
         del admin_states[user_id]
 
         await message.answer(
-            "✅ <b>ТОВАР ДОБАВЛЕН</b>\n"
+            "✅ <b>ТОВАР ДОБАВЛЕН!</b>\n\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
-            f"🆔 ID: "
-            f"<code>{product_id}</code>\n"
+            f"🆔 ID: <code>{product_id}</code>\n"
             f"📄 <b>{product_name}</b>\n"
-            f"💰 {product_price:.2f} ₽\n"
-            f"📁 {document.file_name}\n\n"
-            "Товар уже доступен в каталоге.",
-            reply_markup=admin_menu(),
+            f"💰 {money(product_price)} ₽\n"
+            f"📁 {original_name}\n\n"
+            "Товар уже появился в каталоге."
         )
 
         return
@@ -1784,38 +1700,36 @@ async def admin_input(
 # ADMIN DELETE
 # ============================================================
 
-
 @dp.callback_query(
     F.data.startswith("delete:")
 )
 async def delete_product_callback(
     callback: CallbackQuery,
 ):
-
     if not is_admin(
         callback.from_user.id
     ):
-
         await callback.answer(
             "Доступ запрещён.",
             show_alert=True,
         )
-
         return
 
     try:
-
         product_id = int(
-            callback.data.split(":")[1]
+            callback.data.split(
+                ":",
+                1,
+            )[1]
         )
-
-    except Exception:
-
+    except (
+        ValueError,
+        IndexError,
+    ):
         await callback.answer(
             "Ошибка.",
             show_alert=True,
         )
-
         return
 
     product = get_product(
@@ -1823,12 +1737,10 @@ async def delete_product_callback(
     )
 
     if not product:
-
         await callback.answer(
             "Товар уже удалён.",
             show_alert=True,
         )
-
         return
 
     delete_product(
@@ -1836,7 +1748,6 @@ async def delete_product_callback(
     )
 
     try:
-
         path = Path(
             product["file_path"]
         )
@@ -1845,32 +1756,27 @@ async def delete_product_callback(
             path.unlink()
 
     except Exception:
-
         logger.exception(
-            "File deletion error."
+            "Could not delete product file"
         )
 
     await callback.message.edit_text(
         "🗑 <b>ТОВАР УДАЛЁН</b>\n\n"
-        f"Товар "
-        f"<b>{product['name']}</b> "
-        f"удалён.",
+        f"Товар <b>{product['name']}</b> "
+        "удалён из магазина.",
         reply_markup=admin_products_keyboard(),
     )
 
-    await callback.answer(
-        "Удалено."
-    )
+    await callback.answer()
 
 
 # ============================================================
 # YOOMONEY SIGNATURE
 # ============================================================
 
-
 def verify_yoomoney_signature(
     data: dict,
-):
+) -> bool:
 
     received_sign = data.get(
         "sign"
@@ -1879,10 +1785,9 @@ def verify_yoomoney_signature(
     if not received_sign:
         return False
 
-    parameters = {}
+    params = {}
 
     for key, value in data.items():
-
         if key == "sign":
             continue
 
@@ -1890,38 +1795,38 @@ def verify_yoomoney_signature(
             value,
             list,
         ):
-
             value = value[0]
 
-        parameters[
-            str(key)
-        ] = str(value)
+        params[str(key)] = str(
+            value
+        )
 
-    # ЮMoney требует:
-    #
-    # 1. убрать sign
-    # 2. отсортировать параметры
-    # 3. URL encode
-    # 4. соединить через &
-    # 5. HMAC-SHA256 с секретом
-    #
     sorted_items = sorted(
-        parameters.items(),
+        params.items(),
         key=lambda item: item[0],
     )
 
-    prepared = "&".join(
-        (
-            f"{urllib.parse.quote("
-            f"str(key), "
-            f"safe='-_.~')}"
-            f"="
-            f"{urllib.parse.quote("
-            f"str(value), "
-            f"safe='-_.~')}"
+    parts = []
+
+    for key, value in sorted_items:
+        encoded_key = urllib.parse.quote(
+            str(key),
+            safe="-_.~",
         )
-        for key, value
-        in sorted_items
+
+        encoded_value = urllib.parse.quote(
+            str(value),
+            safe="-_.~",
+        )
+
+        parts.append(
+            encoded_key
+            + "="
+            + encoded_value
+        )
+
+    prepared = "&".join(
+        parts
     )
 
     expected = hmac.new(
@@ -1946,12 +1851,10 @@ def verify_yoomoney_signature(
 # SEND PRODUCT
 # ============================================================
 
-
 async def send_product_to_user(
     user_id: int,
     product,
 ):
-
     file_path = Path(
         product["file_path"]
     )
@@ -1961,9 +1864,9 @@ async def send_product_to_user(
         await bot.send_message(
             user_id,
             "⚠️ <b>Оплата подтверждена.</b>\n\n"
-            "Но файл товара временно "
+            "Но файл товара сейчас "
             "недоступен.\n\n"
-            "Администратор уведомлён.",
+            "Администратор уже уведомлён.",
         )
 
         logger.error(
@@ -1971,17 +1874,15 @@ async def send_product_to_user(
             file_path,
         )
 
-        return False
+        return
 
     await bot.send_message(
         user_id,
-        "🎉 <b>ОПЛАТА ПОДТВЕРЖДЕНА!</b>\n"
+        "🎉 <b>ОПЛАТА ПОЛУЧЕНА!</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"📦 Товар:\n"
-        f"<b>{product['name']}</b>\n\n"
-        "📁 Ваш файл отправляется "
-        "следующим сообщением.\n\n"
-        "Спасибо за покупку ❤️",
+        f"📦 <b>{product['name']}</b>\n\n"
+        "📁 Ваш файл отправляется ниже.\n\n"
+        "Спасибо за покупку! ❤️",
     )
 
     await bot.send_document(
@@ -1996,53 +1897,38 @@ async def send_product_to_user(
         ),
     )
 
-    return True
-
 
 # ============================================================
 # YOOMONEY WEBHOOK
 # ============================================================
 
-
 async def yoomoney_webhook(
     request: web.Request,
 ):
-
     try:
-
         post = await request.post()
 
         data = {
-            key: value
-            for key, value
-            in post.items()
+            str(key): str(value)
+            for key, value in post.items()
         }
 
         logger.info(
-            "YooMoney notification: %s",
+            "ЮMoney notification received: %s",
             data,
         )
-
-        # ----------------------------------------------------
-        # SIGNATURE
-        # ----------------------------------------------------
 
         if not verify_yoomoney_signature(
             data
         ):
-
             logger.warning(
-                "Invalid YooMoney signature."
+                "Invalid ЮMoney signature"
             )
 
             return web.Response(
                 status=403,
                 text="invalid signature",
             )
-
-        # ----------------------------------------------------
-        # TYPE
-        # ----------------------------------------------------
 
         notification_type = data.get(
             "notification_type"
@@ -2052,22 +1938,16 @@ async def yoomoney_webhook(
             "p2p-incoming",
             "card-incoming",
         ):
-
             return web.Response(
                 status=200,
                 text="ignored",
             )
-
-        # ----------------------------------------------------
-        # LABEL
-        # ----------------------------------------------------
 
         label = data.get(
             "label"
         )
 
         if not label:
-
             return web.Response(
                 status=200,
                 text="no label",
@@ -2078,7 +1958,6 @@ async def yoomoney_webhook(
         )
 
         if not order:
-
             logger.warning(
                 "Unknown order label: %s",
                 label,
@@ -2089,32 +1968,20 @@ async def yoomoney_webhook(
                 text="unknown order",
             )
 
-        # ----------------------------------------------------
-        # ALREADY PAID
-        # ----------------------------------------------------
-
         if order["status"] == "paid":
-
             return web.Response(
                 status=200,
                 text="already paid",
             )
 
-        # ----------------------------------------------------
-        # AMOUNT
-        # ----------------------------------------------------
-
         try:
-
             amount_received = float(
                 data.get(
                     "amount",
                     "0",
                 )
             )
-
-        except (ValueError, TypeError):
-
+        except ValueError:
             amount_received = 0.0
 
         expected_amount = float(
@@ -2125,23 +1992,21 @@ async def yoomoney_webhook(
             amount_received + 0.0001
             < expected_amount
         ):
-
             logger.warning(
-                "Amount mismatch: "
-                "received=%s expected=%s",
+                "Amount mismatch: received=%s expected=%s",
                 amount_received,
                 expected_amount,
             )
 
             await bot.send_message(
                 order["user_id"],
-                "⚠️ <b>ПЛАТЁЖ ПОЛУЧЕН</b>\n\n"
-                "Но сумма не совпадает "
-                "с заказом.\n\n"
+                "⚠️ <b>Платёж получен.</b>\n\n"
+                "Но сумма отличается "
+                "от суммы заказа.\n\n"
                 f"Получено: "
-                f"<b>{amount_received:.2f} ₽</b>\n"
+                f"<b>{money(amount_received)} ₽</b>\n"
                 f"Нужно: "
-                f"<b>{expected_amount:.2f} ₽</b>\n\n"
+                f"<b>{money(expected_amount)} ₽</b>\n\n"
                 "Обратитесь в поддержку.",
             )
 
@@ -2150,32 +2015,21 @@ async def yoomoney_webhook(
                 text="amount mismatch",
             )
 
-        # ----------------------------------------------------
-        # MARK PAID
-        # ----------------------------------------------------
-
-        operation_id = str(
-            data.get(
-                "operation_id",
-                "",
-            )
+        operation_id = data.get(
+            "operation_id",
+            "",
         )
 
         paid_order = mark_order_paid(
-            label,
-            operation_id,
+            label=label,
+            operation_id=operation_id,
         )
 
         if not paid_order:
-
             return web.Response(
                 status=200,
                 text="already processed",
             )
-
-        # ----------------------------------------------------
-        # PRODUCT
-        # ----------------------------------------------------
 
         product = get_product(
             paid_order["product_id"]
@@ -2184,14 +2038,14 @@ async def yoomoney_webhook(
         if not product:
 
             logger.error(
-                "Product missing for order %s",
-                paid_order["id"],
+                "Product not found: %s",
+                paid_order["product_id"],
             )
 
             await bot.send_message(
                 paid_order["user_id"],
-                "⚠️ <b>Платёж подтверждён.</b>\n\n"
-                "Но товар не найден.\n"
+                "⚠️ <b>Оплата подтверждена.</b>\n\n"
+                "Но товар не найден.\n\n"
                 "Администратор уже уведомлён.",
             )
 
@@ -2200,58 +2054,39 @@ async def yoomoney_webhook(
                 text="product missing",
             )
 
-        # ----------------------------------------------------
-        # DELIVERY
-        # ----------------------------------------------------
-
         try:
-
-            delivered = (
-                await send_product_to_user(
-                    paid_order["user_id"],
-                    product,
-                )
+            await send_product_to_user(
+                paid_order["user_id"],
+                product,
             )
-
-            if delivered:
-
-                mark_delivery_sent(
-                    label
-                )
 
         except Exception as error:
 
             logger.exception(
-                "Delivery error: %s",
+                "Could not send product: %s",
                 error,
             )
 
             await bot.send_message(
                 paid_order["user_id"],
-                "⚠️ <b>Платёж подтверждён.</b>\n\n"
+                "⚠️ <b>Оплата подтверждена.</b>\n\n"
                 "Возникла ошибка при отправке "
                 "файла.\n\n"
-                "Администратор уведомлён.",
+                "Администратор уже уведомлён.",
             )
 
-        # ----------------------------------------------------
-        # ADMIN NOTIFICATION
-        # ----------------------------------------------------
-
         for admin_id in ADMIN_IDS:
-
             try:
-
                 await bot.send_message(
                     admin_id,
-                    "💰 <b>НОВАЯ ПРОДАЖА!</b>\n"
+                    "💰 <b>НОВАЯ ОПЛАТА</b>\n\n"
                     "━━━━━━━━━━━━━━━━━━\n\n"
                     f"🧾 Заказ: "
                     f"<code>#{paid_order['id']}</code>\n"
                     f"📦 Товар: "
                     f"<b>{product['name']}</b>\n"
                     f"💰 Сумма: "
-                    f"<b>{amount_received:.2f} ₽</b>\n"
+                    f"<b>{money(amount_received)} ₽</b>\n"
                     f"👤 User ID: "
                     f"<code>{paid_order['user_id']}</code>\n"
                     f"🔑 Label: "
@@ -2259,11 +2094,9 @@ async def yoomoney_webhook(
                     f"🆔 Operation: "
                     f"<code>{operation_id}</code>",
                 )
-
             except Exception:
-
                 logger.exception(
-                    "Admin notification error."
+                    "Could not notify admin"
                 )
 
         return web.Response(
@@ -2274,7 +2107,7 @@ async def yoomoney_webhook(
     except Exception as error:
 
         logger.exception(
-            "YooMoney webhook error: %s",
+            "ЮMoney webhook error: %s",
             error,
         )
 
@@ -2285,48 +2118,31 @@ async def yoomoney_webhook(
 
 
 # ============================================================
-# HEALTH
-# ============================================================
-
-
-async def health(
-    request: web.Request,
-):
-
-    return web.Response(
-        status=200,
-        text="Digital Market Bot is running.",
-    )
-
-
-# ============================================================
-# ROOT
-# ============================================================
-
-
-async def root(
-    request: web.Request,
-):
-
-    return web.Response(
-        status=200,
-        text=(
-            "Digital Market Bot is running."
-        ),
-    )
-
-
-# ============================================================
 # TELEGRAM WEBHOOK
 # ============================================================
-
 
 async def telegram_webhook(
     request: web.Request,
 ):
+    incoming_secret = request.headers.get(
+        "X-Telegram-Bot-Api-Secret-Token",
+        "",
+    )
+
+    if not hmac.compare_digest(
+        incoming_secret,
+        TELEGRAM_WEBHOOK_SECRET,
+    ):
+        logger.warning(
+            "Invalid Telegram webhook secret"
+        )
+
+        return web.Response(
+            status=403,
+            text="forbidden",
+        )
 
     try:
-
         update_data = await request.json()
 
         from aiogram.types import Update
@@ -2342,7 +2158,7 @@ async def telegram_webhook(
 
         return web.Response(
             status=200,
-            text="OK",
+            text="ok",
         )
 
     except Exception as error:
@@ -2353,18 +2169,42 @@ async def telegram_webhook(
         )
 
         return web.Response(
-            status=200,
-            text="OK",
+            status=500,
+            text="error",
         )
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+async def health(
+    request: web.Request,
+):
+    return web.Response(
+        status=200,
+        text=(
+            "Digital Market Bot is running."
+        ),
+    )
+
+
+async def root(
+    request: web.Request,
+):
+    return web.Response(
+        status=200,
+        text=(
+            "Digital Market Bot is online."
+        ),
+    )
 
 
 # ============================================================
 # WEB SERVER
 # ============================================================
 
-
 async def start_web_server():
-
     app = web.Application()
 
     app.router.add_get(
@@ -2378,12 +2218,12 @@ async def start_web_server():
     )
 
     app.router.add_post(
-        TELEGRAM_WEBHOOK_PATH,
+        "/telegram/webhook",
         telegram_webhook,
     )
 
     app.router.add_post(
-        YOOMONEY_WEBHOOK_PATH,
+        "/yoomoney",
         yoomoney_webhook,
     )
 
@@ -2410,60 +2250,21 @@ async def start_web_server():
 
 
 # ============================================================
-# VALIDATE CONFIG
+# TELEGRAM WEBHOOK SETUP
 # ============================================================
 
-
-def validate_config():
-
-    errors = []
-
-    if not BOT_TOKEN:
-
-        errors.append(
-            "BOT_TOKEN не задан."
-        )
-
-    if not YOOMONEY_WALLET:
-
-        errors.append(
-            "YOOMONEY_WALLET не задан."
-        )
-
-    if not YOOMONEY_SECRET:
-
-        errors.append(
-            "YOOMONEY_SECRET не задан."
-        )
-
-    if not WEBHOOK_BASE_URL:
-
-        errors.append(
-            "WEBHOOK_BASE_URL не задан."
-        )
-
-    if errors:
-
-        raise RuntimeError(
-            "\n".join(errors)
-        )
-
-
-# ============================================================
-# SETUP TELEGRAM
-# ============================================================
-
-
-async def setup_telegram():
-
-    logger.info(
-        "Setting Telegram webhook: %s",
-        TELEGRAM_WEBHOOK_URL,
+async def setup_telegram_webhook():
+    webhook_url = (
+        WEBHOOK_BASE_URL
+        + "/telegram/webhook"
     )
 
     await bot.set_webhook(
-        url=TELEGRAM_WEBHOOK_URL,
-        drop_pending_updates=False,
+        url=webhook_url,
+        secret_token=(
+            TELEGRAM_WEBHOOK_SECRET
+        ),
+        drop_pending_updates=True,
         allowed_updates=[
             "message",
             "callback_query",
@@ -2472,41 +2273,13 @@ async def setup_telegram():
 
     logger.info(
         "Telegram webhook URL: %s",
-        TELEGRAM_WEBHOOK_URL,
+        webhook_url,
     )
 
 
 # ============================================================
-# BOT COMMANDS
+# STARTUP
 # ============================================================
-
-
-async def setup_commands():
-
-    from aiogram.types import (
-        BotCommand,
-    )
-
-    commands = [
-        BotCommand(
-            command="start",
-            description="🏠 Главное меню",
-        ),
-        BotCommand(
-            command="admin",
-            description="⚙️ Панель администратора",
-        ),
-    ]
-
-    await bot.set_my_commands(
-        commands
-    )
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
 
 async def main():
 
@@ -2514,15 +2287,11 @@ async def main():
 
     init_db()
 
-    web_runner = (
-        await start_web_server()
-    )
+    web_runner = await start_web_server()
 
     try:
 
-        await setup_commands()
-
-        await setup_telegram()
+        await setup_telegram_webhook()
 
         logger.info(
             "================================="
@@ -2534,35 +2303,29 @@ async def main():
         )
 
         logger.info(
-            "Telegram webhook: %s",
-            TELEGRAM_WEBHOOK_URL,
+            "Telegram webhook: %s/telegram/webhook",
+            WEBHOOK_BASE_URL,
         )
 
         logger.info(
-            "YooMoney webhook: %s",
-            YOOMONEY_WEBHOOK_URL,
+            "ЮMoney webhook: %s/yoomoney",
+            WEBHOOK_BASE_URL,
         )
 
         logger.info(
             "================================="
         )
 
-        # ВАЖНО:
-        # Используем webhook, поэтому
-        # polling здесь НЕ запускаем.
-        #
-        # Telegram будет отправлять
-        # обновления на /telegram/webhook.
-
         await asyncio.Event().wait()
 
     finally:
 
-        await web_runner.cleanup()
+        try:
+            await bot.delete_webhook()
+        except Exception:
+            pass
 
-        await bot.delete_webhook(
-            drop_pending_updates=False
-        )
+        await web_runner.cleanup()
 
         await bot.session.close()
 
@@ -2571,15 +2334,13 @@ async def main():
 # RUN
 # ============================================================
 
-
 if __name__ == "__main__":
-
     try:
-
-        asyncio.run(main())
+        asyncio.run(
+            main()
+        )
 
     except KeyboardInterrupt:
-
         logger.info(
             "Bot stopped."
         )
