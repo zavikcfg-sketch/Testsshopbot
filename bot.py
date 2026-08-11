@@ -30,7 +30,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # ЮMoney
 YOOMONEY_WALLET = os.getenv(
     "YOOMONEY_WALLET",
-    "41001XXXXXXXXXXXX"
+    "4100118889570559"
 )
 
 YOOMONEY_SECRET = os.getenv(
