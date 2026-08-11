@@ -659,12 +659,14 @@ def main_menu():
                 button(
                     "💎 Как это работает",
                     "how",
+                    "primary",
                 ),
             ],
             [
                 button(
                     "💬 Поддержка",
                     "support",
+                    "primary",
                 ),
             ],
         ]
@@ -701,6 +703,7 @@ def catalog_keyboard():
             button(
                 "🏠 Главное меню",
                 "home",
+                "primary",
             )
         ]
     )
@@ -732,6 +735,7 @@ def product_keyboard(
                 button(
                     "◀️ Назад к каталогу",
                     "catalog",
+                    "primary",
                 )
             ],
         ]
@@ -800,15 +804,18 @@ def admin_menu():
                 button(
                     "📊 Статистика",
                     "admin_stats",
+                    "primary",
                 ),
             ],
             [
                 button(
                     "🏠 Магазин",
                     "home",
+                    "primary",
                 )
             ],
         ]
+    )
     )
 
 
@@ -826,10 +833,7 @@ def admin_products_keyboard():
         rows.append(
             [
                 button(
-                    (
-                        f"🗑 "
-                        f"{product['name']}"
-                    ),
+                    f"🗑 {product['name']}",
                     f"delete:{product['id']}",
                     "danger",
                 )
@@ -841,6 +845,7 @@ def admin_products_keyboard():
             button(
                 "◀️ Назад",
                 "admin",
+                "primary",
             )
         ]
     )
