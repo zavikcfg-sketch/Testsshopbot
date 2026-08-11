@@ -596,15 +596,32 @@ def button(
     url: str | None = None,
     style: str | None = None,
 ):
+    # --------------------------------------------------------
+    # Совместимость с текущими вызовами:
+    #
+    # button("Каталог", "catalog", "primary")
+    #
+    # Здесь "primary" раньше попадал в url.
+    # Теперь автоматически определяем его как style.
+    # --------------------------------------------------------
+
+    if (
+        url in {
+            "primary",
+            "success",
+            "danger",
+        }
+        and style is None
+    ):
+        style = url
+        url = None
 
     kwargs = {
         "text": text,
     }
 
     if callback_data is not None:
-        kwargs["callback_data"] = (
-            callback_data
-        )
+        kwargs["callback_data"] = callback_data
 
     if url is not None:
         kwargs["url"] = url
